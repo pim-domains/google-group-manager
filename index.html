@@ -8,11 +8,12 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://apis.google.com/js/api.js"></script>
 </head>
 <body>
     <div id="root"></div>
-     
+    
     <script type="text/babel">
         const { useState, useEffect } = React;
         
@@ -70,48 +71,72 @@
             const [loading, setLoading] = useState(false);
             const [message, setMessage] = useState({ type: '', text: '' });
             const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [accessToken, setAccessToken] = useState(null);
 
             const GROUP_EMAIL = 'client-onboarding@progroupmail.com';
             
             // IMPORTANT: Replace these with your actual credentials
-            const API_KEY = 'AIzaSyCZfqVpWQXIpqoP0YvrxIJ2jIZ_zpgB4B4';
             const CLIENT_ID = '781550108214-t33edugggk22o5uk0r1h8k48v9qbcbgd.apps.googleusercontent.com';
 
             useEffect(() => {
-                const initClient = () => {
-                    window.gapi.client.init({
-                        apiKey: API_KEY,
-                        clientId: CLIENT_ID,
-                        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/admin/directory_v1/rest'],
-                        scope: 'https://www.googleapis.com/auth/admin.directory.group.member'
-                    }).then(() => {
-                        const authInstance = window.gapi.auth2.getAuthInstance();
-                        setIsAuthenticated(authInstance.isSignedIn.get());
-                        authInstance.isSignedIn.listen(setIsAuthenticated);
-                    }).catch(err => {
-                        setMessage({ type: 'error', text: 'Failed to initialize Google API. Please check your credentials.' });
-                        console.error('Init error:', err);
+                // Initialize Google Identity Services
+                const initializeGIS = () => {
+                    window.tokenClient = google.accounts.oauth2.initTokenClient({
+                        client_id: CLIENT_ID,
+                        scope: 'https://www.googleapis.com/auth/admin.directory.group.member',
+                        callback: (response) => {
+                            if (response.access_token) {
+                                setAccessToken(response.access_token);
+                                setIsAuthenticated(true);
+                                setMessage({ type: 'success', text: 'Successfully signed in!' });
+                            }
+                        },
                     });
                 };
 
-                window.gapi.load('client:auth2', initClient);
+                // Load gapi client
+                const loadGapi = () => {
+                    gapi.load('client', async () => {
+                        await gapi.client.init({
+                            discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/admin/directory_v1/rest'],
+                        });
+                        initializeGIS();
+                    });
+                };
+
+                if (window.gapi) {
+                    loadGapi();
+                } else {
+                    window.addEventListener('load', loadGapi);
+                }
             }, []);
 
             const handleSignIn = () => {
-                window.gapi.auth2.getAuthInstance().signIn();
+                if (window.tokenClient) {
+                    window.tokenClient.requestAccessToken({ prompt: 'consent' });
+                }
             };
 
             const handleSignOut = () => {
-                window.gapi.auth2.getAuthInstance().signOut();
-                setMembers([]);
+                if (accessToken) {
+                    google.accounts.oauth2.revoke(accessToken, () => {
+                        setAccessToken(null);
+                        setIsAuthenticated(false);
+                        setMembers([]);
+                        setMessage({ type: 'success', text: 'Signed out successfully' });
+                    });
+                }
             };
 
             const fetchMembers = async () => {
+                if (!accessToken) return;
+                
                 setLoading(true);
                 setMessage({ type: '', text: '' });
                 
                 try {
-                    const response = await window.gapi.client.directory.members.list({
+                    gapi.client.setToken({ access_token: accessToken });
+                    const response = await gapi.client.directory.members.list({
                         groupKey: GROUP_EMAIL
                     });
                     
@@ -144,9 +169,11 @@
                 let successCount = 0;
                 let failCount = 0;
 
+                gapi.client.setToken({ access_token: accessToken });
+
                 for (const email of emails) {
                     try {
-                        await window.gapi.client.directory.members.insert({
+                        await gapi.client.directory.members.insert({
                             groupKey: GROUP_EMAIL,
                             resource: {
                                 email: email,
@@ -176,7 +203,8 @@
                 setLoading(true);
                 
                 try {
-                    await window.gapi.client.directory.members.delete({
+                    gapi.client.setToken({ access_token: accessToken });
+                    await gapi.client.directory.members.delete({
                         groupKey: GROUP_EMAIL,
                         memberKey: email
                     });
@@ -192,10 +220,10 @@
             };
 
             useEffect(() => {
-                if (isAuthenticated) {
+                if (isAuthenticated && accessToken) {
                     fetchMembers();
                 }
-            }, [isAuthenticated]);
+            }, [isAuthenticated, accessToken]);
 
             if (!isAuthenticated) {
                 return (
@@ -210,15 +238,11 @@
                             >
                                 Sign in with Google
                             </button>
-                            <div className="mt-6 p-4 bg-amber-50 rounded-lg text-left">
-                                <p className="text-sm text-amber-800 font-semibold mb-2">⚠️ Setup Required:</p>
-                                <ol className="text-xs text-amber-700 space-y-1 list-decimal list-inside">
-                                    <li>Create a Google Cloud project</li>
-                                    <li>Enable Admin SDK API</li>
-                                    <li>Create OAuth credentials</li>
-                                    <li>Add your credentials to this file</li>
-                                </ol>
-                            </div>
+                            {message.text && message.type === 'success' && (
+                                <div className="mt-4 text-green-600 text-sm">
+                                    {message.text}
+                                </div>
+                            )}
                         </div>
                     </div>
                 );
